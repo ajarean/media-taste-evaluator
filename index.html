@@ -107,6 +107,7 @@
     .seg-btn.active[data-type="anime"]      { background: var(--accent-anime); color: #fff; }
     .seg-btn.active[data-type="manga"]      { background: var(--accent-manga); color: #fff; }
     .seg-btn.active[data-type="lightnovel"] { background: var(--accent-ln);   color: #000; }
+    .seg-btn.active[data-type="character"]  { background: #ec4899;             color: #fff; }
 
     /* ── Search ──────────────────────────────────────────────── */
     .search-wrap { position: relative; }
@@ -129,6 +130,7 @@
     .search-input[data-type="anime"]:focus      { border-color: var(--accent-anime); }
     .search-input[data-type="manga"]:focus      { border-color: var(--accent-manga); }
     .search-input[data-type="lightnovel"]:focus { border-color: var(--accent-ln); }
+    .search-input[data-type="character"]:focus  { border-color: #ec4899; }
 
     .search-err {
       font-size: 12px;
@@ -136,6 +138,15 @@
       margin-top: 6px;
       display: none;
     }
+
+    .search-hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 5px;
+      display: none;
+    }
+
+    .search-hint.visible { display: block; }
 
     /* ── Dropdown ────────────────────────────────────────────── */
     .dropdown {
@@ -227,6 +238,7 @@
     .badge-anime      { background: rgba(59,130,246,.18); color: var(--accent-anime); }
     .badge-manga      { background: rgba(168,85,247,.18); color: var(--accent-manga); }
     .badge-lightnovel { background: rgba(245,158,11,.18); color: var(--accent-ln); }
+    .badge-character  { background: rgba(236,72,153,.18); color: #ec4899; }
 
     .check { color: #4ade80; font-size: 15px; flex-shrink: 0; }
 
@@ -271,6 +283,7 @@
     .list-item[data-type="anime"]      { border-left: 3px solid var(--accent-anime); }
     .list-item[data-type="manga"]      { border-left: 3px solid var(--accent-manga); }
     .list-item[data-type="lightnovel"] { border-left: 3px solid var(--accent-ln); }
+    .list-item[data-type="character"]  { border-left: 3px solid #ec4899; }
 
     .remove-btn {
       background: none;
@@ -593,6 +606,7 @@
         <button class="seg-btn active" data-type="anime">Anime</button>
         <button class="seg-btn" data-type="manga">Manga</button>
         <button class="seg-btn" data-type="lightnovel">Light Novel</button>
+        <button class="seg-btn" data-type="character">Characters</button>
       </div>
 
       <div class="search-wrap">
@@ -607,6 +621,7 @@
         />
         <div id="dropdown" class="dropdown" role="listbox"></div>
         <div id="searchErr" class="search-err"></div>
+        <div id="searchHint" class="search-hint">Tip: include the series name for accuracy (e.g. "Homura Madoka")</div>
       </div>
 
       <p class="attribution">Powered by MyAnimeList / Jikan</p>
@@ -650,7 +665,7 @@
   <script>
     'use strict';
 
-    const STORAGE_KEY = 'tasteEvaluator_v1';
+    const STORAGE_KEY = 'tasteEvaluator_v2';
     const BASE        = 'https://api.jikan.moe/v4';
     const DEBOUNCE_MS = 400;
 
@@ -667,7 +682,9 @@
     function loadList() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) userList = JSON.parse(raw);
+        if (raw) { userList = JSON.parse(raw); return; }
+        const old = localStorage.getItem('tasteEvaluator_v1');
+        if (old) { userList = JSON.parse(old); saveList(); }
       } catch { userList = []; }
     }
 
@@ -681,13 +698,14 @@
 
     // ── DOM Helpers ────────────────────────────────────────────
     function badgeClass(type) {
-      return type === 'anime' ? 'badge-anime'
-           : type === 'manga' ? 'badge-manga'
-                              : 'badge-lightnovel';
+      return type === 'anime'      ? 'badge-anime'
+           : type === 'manga'      ? 'badge-manga'
+           : type === 'character'  ? 'badge-character'
+                                   : 'badge-lightnovel';
     }
 
     function badgeLabel(type) {
-      return type === 'anime' ? 'Anime' : type === 'manga' ? 'Manga' : 'LN';
+      return type === 'anime' ? 'Anime' : type === 'manga' ? 'Manga' : type === 'character' ? 'Char' : 'LN';
     }
 
     function makeBadge(type) {
@@ -714,7 +732,12 @@
       return img;
     }
 
-    function makeItemInfo(title, year) {
+    function toJapaneseOrder(name) {
+      const parts = name.trim().split(/\s+/);
+      return parts.length < 2 ? name : parts.reverse().join(' ');
+    }
+
+    function makeItemInfo(title, subtitle) {
       const div = document.createElement('div');
       div.className = 'item-info';
       const t = document.createElement('div');
@@ -722,7 +745,7 @@
       t.textContent = title;
       const y = document.createElement('div');
       y.className = 'item-year';
-      y.textContent = year || 'Unknown year';
+      y.textContent = subtitle || '';
       div.appendChild(t);
       div.appendChild(y);
       return div;
@@ -764,7 +787,7 @@
         row.appendChild(handle);
 
         row.appendChild(makeCover(item.coverUrl, item.type));
-        row.appendChild(makeItemInfo(item.title, item.year));
+        row.appendChild(makeItemInfo(item.title, item.type === 'character' ? item.source : item.year));
         row.appendChild(makeBadge(item.type));
 
         const rm = document.createElement('button');
@@ -827,22 +850,35 @@
       if (!results.length) { dd.classList.remove('open'); return; }
 
       results.forEach(r => {
-        const type  = mediaType;
-        const title = (r.title_english && r.title_english.trim()) ? r.title_english : r.title;
-        const year  = type === 'anime'
-          ? r.aired?.prop?.from?.year
-          : r.published?.prop?.from?.year;
-        const coverUrl = r.images?.jpg?.small_image_url ?? null;
-        const largeUrl = r.images?.jpg?.large_image_url ?? r.images?.jpg?.image_url ?? null;
-        const malId    = r.mal_id;
-        const added    = inList(malId, type);
+        const type = mediaType;
+
+        let title, subtitle, coverUrl, largeUrl, malId, added, onAdd;
+
+        if (type === 'character') {
+          // title    = r.name;
+          title    = toJapaneseOrder(r.name);
+          subtitle = '';
+          coverUrl = r.images?.jpg?.image_url ?? r.images?.jpg?.small_image_url ?? null;
+          largeUrl = coverUrl;
+          malId    = r.mal_id;
+          added    = inList(malId, 'character');
+          onAdd    = null; // character adds are handled async in the click listener
+        } else {
+          title    = (r.title_english && r.title_english.trim()) ? r.title_english : r.title;
+          subtitle = type === 'anime' ? r.aired?.prop?.from?.year : r.published?.prop?.from?.year;
+          coverUrl = r.images?.jpg?.small_image_url ?? null;
+          largeUrl = r.images?.jpg?.large_image_url ?? r.images?.jpg?.image_url ?? null;
+          malId    = r.mal_id;
+          added    = inList(malId, type);
+          onAdd    = () => userList.push({ malId, title, year: subtitle ?? null, type, coverUrl, largeUrl });
+        }
 
         const row = document.createElement('div');
         row.className = 'drop-item' + (added ? ' added' : '');
         row.setAttribute('role', 'option');
 
         row.appendChild(makeCover(coverUrl, type));
-        row.appendChild(makeItemInfo(title, year));
+        row.appendChild(makeItemInfo(title, subtitle));
         row.appendChild(makeBadge(type));
 
         if (added) {
@@ -851,8 +887,21 @@
           ck.textContent = '✓';
           row.appendChild(ck);
         } else {
-          row.addEventListener('click', () => {
-            userList.push({ malId, title, year: year ?? null, type, coverUrl, largeUrl });
+          row.addEventListener('click', async () => {
+            if (type === 'character') {
+              row.style.opacity = '0.5';
+              row.style.pointerEvents = 'none';
+              let source = 'Unknown';
+              try {
+                const fullRes  = await fetch(`${BASE}/characters/${malId}/full`, { headers: { Accept: 'application/json' } });
+                const fullJson = await fullRes.json();
+                const data     = fullJson.data;
+                source = data?.anime?.[0]?.anime?.title ?? data?.manga?.[0]?.manga?.title ?? 'Unknown';
+              } catch {}
+              userList.push({ malId, title, source, type: 'character', coverUrl, largeUrl });
+            } else {
+              onAdd();
+            }
             saveList();
             renderList();
             renderDrop(dropCache);
@@ -889,6 +938,8 @@
           url = `${BASE}/anime?q=${encodeURIComponent(q)}&limit=8&sfw=true`;
         } else if (mediaType === 'manga') {
           url = `${BASE}/manga?q=${encodeURIComponent(q)}&type=manga&limit=8&sfw=true`;
+        } else if (mediaType === 'character') {
+          url = `${BASE}/characters?q=${encodeURIComponent(q)}&limit=8`;
         } else {
           url = `${BASE}/manga?q=${encodeURIComponent(q)}&type=lightnovel&limit=8&sfw=true`;
         }
@@ -917,7 +968,7 @@
     let promptMode = 'analytical';
 
     const PROMPTS = {
-      analytical: (anime, manga, ln, fmt) => [
+      analytical: (anime, manga, ln, characters, fmt, fmtChar) => [
         "The following is the user's media consumption list across anime, manga, and light novels.",
         "Analyze their taste profile along these specific axes, in order:",
         "1. THEMATIC CORE — What 2-3 recurring themes or emotional preoccupations tie the list together? Be specific to the titles, not generic.",
@@ -925,6 +976,7 @@
         "3. BLIND SPOTS — What didn't make the favorites list? Focus especially on works *within their own apparent taste territory* that are conspicuously absent — not genres they obviously reject. Do NOT frame this as \"they haven't seen X\" — frame it as \"X didn't resonate enough to include, which suggests...\" What does that specific exclusion reveal?",
         "4. PERSONA READ — Based purely on these selections, describe the kind of person making this list. Not their demographics — their actual personality, likely self-image, and how they probably talk about media at parties.",
         "5. ONE-LINE VERDICT — A single brutal, specific sentence summarizing their taste.",
+        "6. CHARACTER PROFILE — What does the pattern of their favorite characters reveal about their idealized self-image or the type of person they find most compelling? Look for archetypes, recurring dynamics, or contradictions with the media list.",
         "",
         "Be direct. Do not hedge. Do not summarize plot. Assume the reader knows these works.",
         '',
@@ -936,15 +988,18 @@
         '',
         '**Light Novels read:**',
         fmt(ln),
+        '',
+        '**Favorite characters:**',
+        fmtChar(characters),
       ].join('\n'),
 
-      roast: (anime, manga, ln, fmt) => [
+      roast: (anime, manga, ln, characters, fmt, fmtChar) => [
         "The following is someone's list of their favorite anime, manga, and light novels.",
         "Your job is to roast their taste — hard. You are a brutally witty critic who finds the most embarrassing possible interpretation of every choice they've made.",
         "",
         "Structure your roast as follows:",
         "1. OPENING DIAGNOSIS — One punchy paragraph establishing the overall pathology of this taste profile. Be specific to the actual titles, not generic.",
-        "2. INDIVIDUAL CRIMES — Pick 2-3 of the most roastable specific choices and explain exactly why each one is a red flag. Be precise and cruel.",
+        "2. INDIVIDUAL CRIMES — Pick 2-3 of the most roastable specific choices and explain exactly why each one is a red flag. Be precise and cruel. If they've added favorite characters, these are mandatory roast targets — a character choice is the most revealing thing on the list.",
         "3. WHAT THIS SAYS ABOUT THEM — What kind of person has this exact combination of titles in their favorites? Paint a picture. Be mean but accurate.",
         "4. THE BACKHANDED COMPLIMENT — Find one genuinely defensible thing about their taste and deliver it in the most condescending way possible.",
         "5. SENTENCE — One closing line, delivered like a verdict.",
@@ -959,9 +1014,12 @@
         '',
         '**Light Novels read:**',
         fmt(ln),
+        '',
+        '**Favorite characters:**',
+        fmtChar(characters),
       ].join('\n'),
 
-      therapist: (anime, manga, ln, fmt) => [
+      therapist: (anime, manga, ln, characters, fmt, fmtChar) => [
         "The following is a patient's list of their favorite anime, manga, and light novels.",
         "You are a perceptive therapist conducting an intake session. Analyze what their media consumption reveals about their inner life — with warmth, but without flinching from uncomfortable truths.",
         "",
@@ -970,7 +1028,8 @@
         "2. CORE WOUND — Based on the recurring themes, what does this taste profile suggest about their relationship with intimacy, failure, control, or identity? Be specific to the titles.",
         "3. COPING MECHANISM — How are they using fiction? As escapism, as emotional rehearsal, as self-soothing, as a mirror? What does that suggest?",
         "4. GROWTH EDGE — What kinds of stories are conspicuously absent from their favorites — not because they dislike them, but because they might be too uncomfortable or unfamiliar to seek out?",
-        "5. CLINICIAN'S NOTE — A single honest, compassionate sentence summarizing what you'd want them to reflect on.",
+        "5b. CHARACTER MIRROR — If favorite characters are listed, what does the pattern reveal about who they wish they were, who they fear they are, or what relational dynamic they keep seeking out?",
+        "6. CLINICIAN'S NOTE — A single honest, compassionate sentence summarizing what you'd want them to reflect on.",
         "",
         "Tone: Warm but clear-eyed. You care about them. You're also not going to let them off the hook. Do not pathologize, but do not minimize. Treat their taste as a genuine window into their interior life.",
         '',
@@ -982,19 +1041,27 @@
         '',
         '**Light Novels read:**',
         fmt(ln),
+        '',
+        '**Favorite characters:**',
+        fmtChar(characters),
       ].join('\n'),
     };
 
     // ── Prompt Builder ─────────────────────────────────────────
     function buildPrompt() {
-      const anime = userList.filter(i => i.type === 'anime');
-      const manga = userList.filter(i => i.type === 'manga');
-      const ln    = userList.filter(i => i.type === 'lightnovel');
+      const anime      = userList.filter(i => i.type === 'anime');
+      const manga      = userList.filter(i => i.type === 'manga');
+      const ln         = userList.filter(i => i.type === 'lightnovel');
+      const characters = userList.filter(i => i.type === 'character');
       const fmt = arr =>
         arr.length
           ? arr.map(i => `- ${i.title}${i.year ? ` (${i.year})` : ''}`).join('\n')
           : 'None.';
-      return PROMPTS[promptMode](anime, manga, ln, fmt);
+      const fmtChar = arr =>
+        arr.length
+          ? arr.map(i => `- ${i.title} (${i.source})`).join('\n')
+          : 'None.';
+      return PROMPTS[promptMode](anime, manga, ln, characters, fmt, fmtChar);
     }
 
     // ── Toast ──────────────────────────────────────────────────
@@ -1051,14 +1118,15 @@
     }
 
     async function buildGrid(n) {
-      const needed = n * n;
-      if (userList.length < needed) {
-        const diff = needed - userList.length;
+      const needed   = n * n;
+      const eligible = userList.filter(i => i.type !== 'character');
+      if (eligible.length < needed) {
+        const diff = needed - eligible.length;
         showToast(`Add ${diff} more title${diff !== 1 ? 's' : ''} for a ${n}×${n} grid`);
         return;
       }
 
-      const items  = userList.slice(0, needed);
+      const items  = eligible.slice(0, needed);
       const canvas = document.createElement('canvas');
       canvas.width  = n * CELL_W;
       canvas.height = n * CELL_H;
@@ -1176,6 +1244,7 @@
         input.value = '';
         showErr(null);
         hideDrop();
+        document.getElementById('searchHint').classList.toggle('visible', mediaType === 'character');
       });
     });
 
