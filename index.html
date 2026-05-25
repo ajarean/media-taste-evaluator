@@ -428,6 +428,25 @@
 
     .theme-toggle:hover { background: var(--hover); transform: scale(1.08); }
 
+    /* ── Drag & Drop ────────────────────────────────────────── */
+    .drag-handle {
+      color: var(--muted);
+      cursor: grab;
+      font-size: 14px;
+      flex-shrink: 0;
+      padding: 0 2px;
+      opacity: 0.4;
+      user-select: none;
+      line-height: 1;
+    }
+
+    .list-item:hover .drag-handle { opacity: 0.8; }
+    .drag-handle:active { cursor: grabbing; }
+    .list-item.dragging { opacity: 0.35; }
+
+    .list-item.drag-over-top    { box-shadow: 0 -2px 0 var(--accent-anime); }
+    .list-item.drag-over-bottom { box-shadow: 0  2px 0 var(--accent-anime); }
+
     /* ── Mobile ──────────────────────────────────────────────── */
     @media (max-width: 700px) {
       .app {
@@ -514,6 +533,9 @@
     let dropCache  = [];
     let debTimer   = null;
     let fetchCtrl  = null;
+    let dragSrcIdx = null;
+    let dragTgtIdx = null;
+    let dragPos    = null; // 'top' | 'bottom'
 
     // ── Storage ────────────────────────────────────────────────
     function loadList() {
@@ -580,6 +602,13 @@
       return div;
     }
 
+    // ── Drag Helpers ───────────────────────────────────────────
+    function clearDragIndicators() {
+      document.querySelectorAll('#listBody .list-item').forEach(el => {
+        el.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+    }
+
     // ── Render List ────────────────────────────────────────────
     function renderList() {
       const body   = document.getElementById('listBody');
@@ -596,10 +625,17 @@
         return;
       }
 
-      userList.forEach(item => {
+      userList.forEach((item, idx) => {
         const row = document.createElement('div');
         row.className = 'list-item';
         row.dataset.type = item.type;
+        row.draggable = true;
+
+        const handle = document.createElement('span');
+        handle.className = 'drag-handle';
+        handle.textContent = '⠿';
+        handle.setAttribute('aria-hidden', 'true');
+        row.appendChild(handle);
 
         row.appendChild(makeCover(item.coverUrl, item.type));
         row.appendChild(makeItemInfo(item.title, item.year));
@@ -616,6 +652,41 @@
           renderDrop(dropCache);
         });
         row.appendChild(rm);
+
+        // ── Drag events ──
+        row.addEventListener('dragstart', e => {
+          dragSrcIdx = idx;
+          e.dataTransfer.effectAllowed = 'move';
+          requestAnimationFrame(() => row.classList.add('dragging'));
+        });
+
+        row.addEventListener('dragend', () => {
+          row.classList.remove('dragging');
+          clearDragIndicators();
+          dragSrcIdx = dragTgtIdx = dragPos = null;
+        });
+
+        row.addEventListener('dragover', e => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          const rect = row.getBoundingClientRect();
+          const pos  = e.clientY < rect.top + rect.height / 2 ? 'top' : 'bottom';
+          clearDragIndicators();
+          row.classList.add(pos === 'top' ? 'drag-over-top' : 'drag-over-bottom');
+          dragTgtIdx = idx;
+          dragPos    = pos;
+        });
+
+        row.addEventListener('drop', e => {
+          e.preventDefault();
+          if (dragSrcIdx === null || dragSrcIdx === dragTgtIdx) return;
+          const [moved] = userList.splice(dragSrcIdx, 1);
+          let insertAt  = dragTgtIdx > dragSrcIdx ? dragTgtIdx - 1 : dragTgtIdx;
+          if (dragPos === 'bottom') insertAt += 1;
+          userList.splice(insertAt, 0, moved);
+          saveList();
+          renderList();
+        });
 
         body.appendChild(row);
       });
